@@ -1,0 +1,15 @@
+# Minimal valid configuration: one simulated device, one synthetic measurement.
+# All values are SYNTHETIC. Run with:  set TEXTILE_AUTOMATION_CONFIG=examples\simulator_config.toml
+schema_version = 1
+
+[[devices]]
+device_id = "sim-01"
+name = "Simulated device 01"
+adapter_type = "simulator"
+
+[[devices.measurements]]
+key = "speed"
+unit = "rpm"
+[devices.measurements.source_mapping]
+base = 100.0
+amplitude = 5.0

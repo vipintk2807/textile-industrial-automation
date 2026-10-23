@@ -1,0 +1,163 @@
+# Textile Industrial Automation - example configuration (SIMULATOR ONLY).
+#
+# Copy this file to config/devices.toml and edit the copy. Every device below uses the built-in
+# simulator: all values are SYNTHETIC. Ranges, units and fault schedules are illustrative test
+# assumptions, NOT verified operating limits of any textile machine.
+#
+# Do not put passwords, tokens or real factory network addresses in this file.
+
+schema_version = 1
+
+[application]
+log_level = "INFO"            # DEBUG, INFO, WARNING or ERROR
+ui_refresh_seconds = 2        # how often the monitoring page re-reads state (never polls devices)
+# data_dir = "D:/TextileData" # optional; default is %LOCALAPPDATA%\TextileIndustrialAutomation
+
+[storage]
+# database_path = "D:/TextileData/textile_automation.db"   # optional
+# retention_days = 30         # optional; omit to keep all history (documented default)
+
+# ---------------------------------------------------------------- device 1: normal operation
+[[devices]]
+device_id = "sim-knit-01"
+name = "Simulated knitting machine 01"
+device_type = "circular_knitting_machine"
+adapter_type = "simulator"
+enabled = true
+poll_interval_s = 1.0
+connect_timeout_s = 2.0
+response_timeout_s = 2.0
+stale_after_intervals = 3.0     # a value older than 3 x poll interval is shown as STALE
+
+[devices.retry]
+initial_delay_s = 1.0
+max_delay_s = 30.0
+multiplier = 2.0
+max_consecutive_failures = 10   # after this many failures in a row the device goes to ERROR
+
+[devices.adapter_settings]
+seed = 42
+
+[[devices.adapter_settings.operating_states]]   # synthetic operating-state schedule
+from_read = 1
+state = "RUNNING"
+[[devices.adapter_settings.operating_states]]
+from_read = 120
+state = "IDLE"
+[[devices.adapter_settings.operating_states]]
+from_read = 150
+state = "RUNNING"
+
+[[devices.measurements]]
+key = "spindle_speed"
+name = "Spindle speed (synthetic)"
+data_type = "float"
+unit = "rpm"
+min_value = 0
+max_value = 2000
+[devices.measurements.source_mapping]
+base = 1200.0
+amplitude = 40.0
+period_cycles = 60
+noise = 2.0
+
+[[devices.measurements]]
+key = "bed_temperature"
+name = "Bed temperature (synthetic)"
+data_type = "float"
+unit = "°C"
+min_value = 0
+max_value = 150
+[devices.measurements.source_mapping]
+base = 42.5
+amplitude = 1.5
+period_cycles = 90
+noise = 0.1
+
+[[devices.measurements]]
+key = "pattern_name"
+name = "Pattern name (synthetic)"
+data_type = "str"
+[devices.measurements.source_mapping]
+choices = ["PATTERN-A", "PATTERN-B"]
+period_cycles = 100
+
+# ------------------------------------------- device 2: scripted faults (watch the states change)
+[[devices]]
+device_id = "sim-dye-02"
+name = "Simulated dyeing machine 02 (fault demo)"
+device_type = "dyeing_machine"
+adapter_type = "simulator"
+enabled = true
+poll_interval_s = 1.0
+response_timeout_s = 1.0
+
+[devices.retry]
+initial_delay_s = 1.0
+max_delay_s = 8.0
+multiplier = 2.0
+max_consecutive_failures = 6
+
+[devices.adapter_settings]
+seed = 7
+
+[[devices.adapter_settings.faults]]     # read attempts 10-12 time out
+kind = "read_timeout"
+start = 10
+duration = 3
+[[devices.adapter_settings.faults]]     # one measurement missing for 5 reads
+kind = "missing"
+key = "liquor_level"
+start = 30
+duration = 5
+[[devices.adapter_settings.faults]]     # NaN value for 3 reads
+kind = "invalid_value"
+key = "bath_temperature"
+mode = "nan"
+start = 45
+duration = 3
+[[devices.adapter_settings.faults]]     # the link drops once; the app reconnects
+kind = "link_drop"
+start = 60
+
+[[devices.measurements]]
+key = "bath_temperature"
+name = "Bath temperature (synthetic)"
+unit = "°C"
+min_value = 0
+max_value = 150
+[devices.measurements.source_mapping]
+base = 60.0
+amplitude = 5.0
+period_cycles = 120
+noise = 0.2
+
+[[devices.measurements]]
+key = "liquor_level"
+name = "Liquor level (synthetic)"
+unit = "%"
+min_value = 0
+max_value = 100
+[devices.measurements.source_mapping]
+base = 70.0
+amplitude = 10.0
+period_cycles = 80
+noise = 1.0
+
+# ------------------------------------------------------------ device 3: disabled (never polled)
+[[devices]]
+device_id = "sim-finish-03"
+name = "Simulated finishing machine 03 (disabled)"
+device_type = "finishing_machine"
+adapter_type = "simulator"
+enabled = false
+
+[devices.adapter_settings]
+seed = 3
+
+[[devices.measurements]]
+key = "line_speed"
+name = "Line speed (synthetic)"
+unit = "m/min"
+[devices.measurements.source_mapping]
+base = 30.0

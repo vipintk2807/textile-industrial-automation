@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "textile-industrial-automation"
+version = "0.1.0"
+description = "Local, read-only, simulator-first monitoring foundation for textile machinery (Python, Streamlit, SQLite)."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Vipin T K" }]
+# Version ranges, not exact pins: this release was not installed against a resolved dependency
+# set by its author. After your first green `pytest` run, create a lock file with
+# scripts\freeze.bat and commit it (see docs/VERIFICATION.md).
+dependencies = [
+  "streamlit>=1.40,<2",
+  "SQLAlchemy>=2.0.30,<3",
+  "alembic>=1.13,<2",
+  "pydantic>=2.7,<3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11"]
+
+[project.scripts]
+textile-automation = "textile_automation.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"textile_automation.storage.migrations" = ["script.py.mako"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["F", "E7", "E9", "B", "UP"]
+ignore = ["B008", "UP042"]
+
+[tool.mypy]
+python_version = "3.12"
+check_untyped_defs = true
+ignore_missing_imports = true
+warn_redundant_casts = true

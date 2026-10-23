@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local runtime data and user-specific configuration (never commit)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+logs/
+*.log
+config/devices.toml
+.env
+.streamlit/secrets.toml
+requirements-lock.txt.bak
+
+# Private planning documents used to generate this project (do not publish)
+/master_prompt.md
+/project_explanation.md
+/technical_specification.md
+/hardware_communication_specification.md
+/app_workflow.md
+/app_theme.md
+/testing_requirements.md
+/planning/
+/private/
