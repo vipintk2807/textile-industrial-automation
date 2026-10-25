@@ -1,146 +1,317 @@
 # Textile Industrial Automation
 
-A local, **read-only, simulator-first** monitoring foundation for textile machinery.
-It acquires measurements from *device adapters*, validates them, tracks communication state and
-data quality separately, stores history in SQLite, and shows everything in a Streamlit dashboard.
+A local monitoring tool for textile machinery. It collects machine readings, checks them, and shows which data is current, old, or wrong.
 
-> **Safety and scope.** This release monitors only. It contains **no machine-control, setpoint or
-> register-write capability**, is **not** a certified industrial HMI, and does **not** replace
-> machine safety systems. **Only the built-in simulator is implemented.** All values it produces are
-> **synthetic** and are labelled `SIMULATED` everywhere. No physical protocol has been verified
-> against real equipment (see [docs/HARDWARE_INTEGRATION.md](docs/HARDWARE_INTEGRATION.md)).
+> **Please read first.** The tool currently works with **simulated machines only**. All values it shows are synthetic and are labelled `SIMULATED`. It does not yet connect to real equipment. It is **read-only**: it cannot start, stop, or change any machine. It is not a safety system.
 
-> **Verification status (read before relying on it).** The core logic is covered by 208 passing automated tests in the author's sandbox (and the database, Pydantic and Streamlit tests passed on the owner's Windows machine, see docs/VERIFICATION.md). The
-> SQLite/Alembic storage layer, Pydantic configuration shape-checks and the Streamlit pages were written to spec but could not be
-> *executed* where this project was built (no network, libraries missing). Run `scripts\test.bat` first; the 26 tests that were skipped
-> there will run on your machine. Details: [docs/VERIFICATION.md](docs/VERIFICATION.md).
+## Overview
 
-## What you get
+Textile Industrial Automation reads measurements from machines, such as speed, temperature, or liquor level. It checks every reading before it is shown or saved. It keeps a history and records problems as events. A web dashboard on the same computer shows the current state of each machine.
 
-| Capability | Status in this release |
+The project is an early release (version 0.1.0). It is the software foundation for monitoring knitting, dyeing, and finishing machines. A real machine connection is the next step. See [Current Status](#current-status).
+
+## Industrial Problem
+
+Textile machines produce a lot of data. Examples are spindle speed, bath temperature, liquor level, pattern name, and running or stopped state. This data often stays on each machine's own display, controller, or sensor.
+
+When it is collected in one place, three practical problems appear:
+
+- **Old data looks current.** A screen can stop updating and still show the last number. Nobody notices that it is old.
+- **A lost connection looks like a stopped machine.** If contact is lost, it is hard to tell whether the machine stopped or the monitoring failed.
+- **Bad values are easy to miss.** A reading can be empty, out of range, in the wrong unit, or not a number.
+
+This project does not try to control machines. It focuses on one question: **can we trust what the screen shows?**
+
+## Proposed Solution
+
+The tool treats three things separately, and never mixes them up.
+
+| What | Question it answers | Possible values |
+|---|---|---|
+| Connection | Is the monitoring link to the machine working? | `DISABLED`, `DISCONNECTED`, `CONNECTING`, `CONNECTED`, `DEGRADED`, `RECOVERING`, `ERROR` |
+| Data quality | Can this reading be trusted? | `VALID`, `STALE`, `INVALID`, `MISSING`, `UNKNOWN` |
+| Machine state | What does the machine say it is doing? | `RUNNING`, `STOPPED`, `IDLE`, `FAULTED`, or "not reported" |
+
+Some examples of how this helps:
+
+- If a reading stops arriving, the last value stays on screen but is marked `STALE`. It is never replaced by zero or a guess.
+- If the connection is lost, the machine state shows "Unknown". It does **not** show "stopped".
+- A reading that fails a check is not saved as history. It is recorded as an event.
+- `CONNECTED` means the link works and the latest reading passed every check. It does not mean the machine is running or safe.
+
+## Key Capabilities
+
+These features are implemented in this release.
+
+- **Simulated machines.** A built-in simulator produces repeatable synthetic readings. The same settings always give the same values.
+- **Simulated faults.** Faults can be scripted in the configuration file or started from the dashboard: read timeout, lost link, refused connection, missing measurement, invalid value, and slow response.
+- **Reading checks.** Each reading is checked for type, valid number, configured range, unit, timestamp, missing values, duplicates, and unknown measurements.
+- **Data quality labels.** A reading becomes `STALE` when it is older than three times the reading interval. This factor can be changed per device.
+- **Safe failure handling.** After a failure the tool retries with growing delays. After a set number of failures the device goes to `ERROR`, and an operator can press Retry. One failing device does not stop the others.
+- **History and events.** Accepted readings and events are stored in a local SQLite database. Repeated identical events are summarised so the log does not flood.
+- **Restricted mode.** If saving fails, live values keep updating. The dashboard clearly states that history is not being saved.
+- **Restart safety.** After a restart, values from the previous session are shown as `STALE` until they are read again.
+- **Web dashboard.** Five pages: Overview, Devices, History, Diagnostics, and Configuration.
+- **Configuration file.** Machines and measurements are described in a TOML file. The file is fully checked at start-up, and every problem is reported with its location.
+- **Command-line tools.** Check a configuration, create the database, run without a browser, back up, and delete old history.
+- **Local only.** The dashboard listens on `127.0.0.1` only. It sends no usage data. Secret-like settings (such as passwords or tokens) in a device's settings are rejected.
+
+## How It Works
+
+**Input → Process → Output**
+
+| Step | What happens |
 |---|---|
-| Deterministic simulator (seeded values, scripted/injectable faults, synthetic operating state) | Implemented |
-| Common read-only adapter contract (open / connect / read / close) | Implemented |
-| Validation pipeline (types, finite numbers, ranges, units, timestamps, missing, unknown, duplicates) | Implemented |
-| Separate **communication state** (7 states), **data quality** (5 values), **machine operating state** | Implemented |
-| Bounded retry with exponential backoff, ERROR after N failures, operator "Retry" | Implemented |
-| Timeout guard that also protects against adapters that hang; no overlapping requests | Implemented |
-| SQLite history (SQLAlchemy 2 + Alembic migrations), events, retention, online backup | Implemented |
-| Restricted mode when storage fails (monitoring continues, loudly flagged, no unbounded backlog) | Implemented |
-| Streamlit UI: Overview, Devices (+ details), History (gap-aware chart, CSV), Diagnostics, Configuration | Implemented |
-| TOML configuration with full validation and path-specific error messages | Implemented |
-| Modbus TCP (or any physical) adapter | **Deferred** - see HARDWARE_INTEGRATION.md |
-| Authentication, multi-user access, remote access, alerts, OEE, control | Out of scope |
+| Input | A device adapter reads the measurements of one machine. Today the adapter is the simulator. |
+| Process | Each reading is checked. The connection state and data quality are updated. |
+| Output | Valid readings are saved. Problems are recorded as events. The dashboard shows the current state. |
 
-## Requirements
+A typical use:
 
-* Windows 10/11, **Python 3.12 or newer** ([python.org](https://www.python.org/downloads/)), internet access for the one-time install.
-* No GPU, no paid service, no account. Everything is free and open source (MIT licence for this project).
-* Declared dependency *ranges* (not yet pinned to a tested set) are in `pyproject.toml`: Streamlit, SQLAlchemy 2, Alembic, Pydantic 2 (runtime); pytest, Ruff, mypy (development).
+1. Describe each machine in `config\devices.toml`: name, measurements, units, and how often to read.
+2. Start the application.
+3. Open the dashboard in a browser.
+4. Watch the connection state, data quality, and history of each machine.
+5. Open Diagnostics to see rejected readings and events.
 
-## Quick start (Windows Command Prompt)
+Example from the sample configuration. The simulated dyeing machine `sim-dye-02` has scripted faults. After about ten seconds its reads time out and its state changes to `DEGRADED`. The last values become `STALE`. The tool then reconnects, and the state returns to `CONNECTED`. Each step is recorded as an event.
+
+## System Architecture
+
+One Python program runs everything on one computer. There is no cloud service and no separate server.
+
+```mermaid
+flowchart LR
+    A["Device adapter<br/>(simulator today)"] --> B["Checks and<br/>quality rules"]
+    B --> C[("SQLite history<br/>and events")]
+    B --> D["Live device state"]
+    C --> E["Web dashboard<br/>(Streamlit)"]
+    D --> E
+```
+
+| Part | Purpose |
+|---|---|
+| Device adapter | Talks to one kind of machine. It can only read. It has no write or command function. |
+| Acquisition | Runs one worker per device. Enforces timeouts, retries, and a stop after repeated failure. |
+| Checks and quality | Validates each reading and sets the data quality. |
+| Storage | Saves accepted readings and events in SQLite. |
+| Dashboard | Shows the state. It only reads state and never talks to machines. |
+
+More detail is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Technology Stack
+
+| Technology | Use in this project |
+|---|---|
+| Python 3.12 or newer | Main language |
+| Streamlit | Web dashboard |
+| SQLite with SQLAlchemy 2 | Local database |
+| Alembic | Database schema migrations |
+| Pydantic 2 | Checks the structure of the configuration file |
+| TOML (Python standard library) | Configuration format |
+| Altair and pandas (installed with Streamlit) | Chart on the History page |
+| pytest | Automated tests |
+| Ruff and mypy | Code formatting, linting, and type checks |
+
+## Installation & Setup
+
+### Prerequisites
+
+- Windows 10 or 11. The provided scripts are for Windows.
+- Python 3.12 or newer from [python.org](https://www.python.org/downloads/). Install the `py` launcher option.
+- Internet access for the one-time installation.
+- Git, if you want to clone the repository.
+
+### Install
+
+Run these commands in Command Prompt or PowerShell.
 
 ```bat
-cd path\to\textile-industrial-automation
+git clone https://github.com/vipintk2807/textile-industrial-automation.git
+cd textile-industrial-automation
 scripts\setup.bat
+```
+
+`setup.bat` does three things:
+
+- Creates a virtual environment in `.venv`.
+- Installs the dependencies listed in `pyproject.toml`.
+- Copies `config\devices.example.toml` to `config\devices.toml`. Edit this copy for your own devices. Git ignores it.
+
+To install without the script:
+
+```bat
+py -3 -m venv .venv
+.venv\Scripts\python.exe -m pip install -e ".[dev]"
+copy config\devices.example.toml config\devices.toml
+```
+
+### Check the installation
+
+```bat
 scripts\test.bat
+```
+
+All tests should pass. The test run needs no hardware.
+
+### Start
+
+```bat
 scripts\run.bat
 ```
 
-* `setup.bat` creates `.venv`, installs everything, and copies `config\devices.example.toml` to `config\devices.toml`.
-* `test.bat` runs the automated tests. **Run this first** and read [docs/VERIFICATION.md](docs/VERIFICATION.md) (some layers were not executable where the project was built).
-* `run.bat` starts the app at <http://127.0.0.1:8501> (local only). Stop it with `Ctrl+C` in the window.
-* No browser? `scripts\simulate.bat` runs the simulator for 30 seconds and prints device status in the terminal.
+Open <http://127.0.0.1:8501> in your browser if it does not open by itself. Press `Ctrl+C` in the window to stop.
 
-The first run uses three simulated devices: one healthy, one that **scripts faults** (timeouts, a missing
-measurement, a NaN value, a link drop) so you can watch the states change, and one disabled device.
+To run without a browser for 30 seconds and print the device status in the window:
 
-## Using the dashboard
+```bat
+scripts\simulate.bat
+```
 
-| Page | Purpose |
+## Usage
+
+### Dashboard pages
+
+| Page | Use it to |
 |---|---|
-| **Overview** | Counts, device cards, latest measurements. A banner states when data is simulated. |
-| **Devices** | Device table; pick a device for details, retry action, recent events and (simulated devices only) **Simulator test controls** to inject a synthetic fault. |
-| **History** | Stored measurements for a device/measurement/time range. The chart breaks the line at gaps (no interpolation). CSV export keeps source identity. |
-| **Diagnostics** | Monitoring/persistence status, active faults, rejected/missing/stale measurements, filterable event history. |
-| **Configuration** | Validation status, loaded devices, data locations, scope statement. Read-only. |
+| Overview | See device counts, a card per device, and the latest measurements. |
+| Devices | See the device table and open a device for details. Press Retry on a device in `ERROR`. Start a synthetic fault on a simulated device. |
+| History | Choose a device, a measurement, and a time range. See the chart and stored records. Download the range as CSV. |
+| Diagnostics | See the persistence status, active faults, rejected readings, and the event history with filters. |
+| Configuration | See whether the configuration is valid, the loaded devices, and where data is stored. |
 
-### How to read the status labels
+The chart on the History page breaks the line where data is missing. It never joins points across a gap. The CSV file includes the data source of every row.
 
-* **Communication state** - the monitoring *link*: `DISABLED`, `DISCONNECTED`, `CONNECTING`, `CONNECTED`, `DEGRADED`, `RECOVERING`, `ERROR`.
-  `CONNECTED` means the link works **and the latest read was fully accepted**. It does not mean the machine is running or safe.
-* **Data quality** (per measurement) - `VALID`, `STALE` (older than `stale_after_intervals x poll_interval_s`), `INVALID`, `MISSING`, `UNKNOWN`.
-  A stale or restored-from-last-session value keeps its old number but is labelled; it is never replaced by zero or a guess.
-* **Machine state** - only what the source reports (the simulator reports a *synthetic* schedule). When communication is lost it shows *Unknown*, **not** "stopped".
+### Try a failure
 
-Every status uses a text label **and** a symbol, never colour alone.
+1. Open **Devices** and select `sim-dye-02`.
+2. Open **Simulator test controls**.
+3. Choose **Read timeout** and press **Inject synthetic fault**.
+4. Watch the connection state change, then recover. Open **Diagnostics** to see the events.
 
-## Configuration
+Fault injection works only on simulated devices. It is refused for any other adapter.
 
-Edit `config\devices.toml` (a copy of `config\devices.example.toml`, ignored by Git), then restart the app.
-Check a file without starting anything:
+### Configure devices
 
-```bat
-.venv\Scripts\activate.bat
-python -m textile_automation validate-config --config config\devices.toml
+Edit `config\devices.toml` and restart the application. A minimal valid file is `examples\simulator_config.toml`:
+
+```toml
+schema_version = 1
+
+[[devices]]
+device_id = "sim-01"
+name = "Simulated device 01"
+adapter_type = "simulator"
+
+[[devices.measurements]]
+key = "speed"
+unit = "rpm"
+[devices.measurements.source_mapping]
+base = 100.0
+amplitude = 5.0
 ```
 
-Errors list **every** problem with its path, e.g. `devices[1].poll_interval_s: must be between 0.05 and 3600 (got 0)`.
-Unknown keys are rejected so typos are not silently ignored. Secrets in the file are rejected; see [docs/SECURITY.md](docs/SECURITY.md).
-
-Minimal valid example: `examples\simulator_config.toml` (use it with `set TEXTILE_AUTOMATION_CONFIG=examples\simulator_config.toml`).
-
-Environment variables: `TEXTILE_AUTOMATION_CONFIG` (config file), `TEXTILE_AUTOMATION_DATA_DIR` (database and logs folder),
-`TEXTILE_AUTOMATION_LOG_LEVEL` (`DEBUG`/`INFO`/`WARNING`/`ERROR`).
-
-Runtime data defaults to `%LOCALAPPDATA%\TextileIndustrialAutomation\` (database `textile_automation.db`, logs in `logs\`).
-
-## Command-line tools
+Check a file without starting the monitoring:
 
 ```bat
-python -m textile_automation validate-config --config config\devices.toml
-python -m textile_automation init-db
-python -m textile_automation run-simulator --seconds 30
-python -m textile_automation backup D:\Backups\
-python -m textile_automation purge --days 90
+.venv\Scripts\python.exe -m textile_automation validate-config --config config\devices.toml
 ```
 
-## Operations
+Unknown settings are rejected, so spelling mistakes are not silently ignored. All problems are listed together with their location.
 
-* **Backup:** `python -m textile_automation backup <folder-or-file>` uses SQLite's online backup, safe while the app runs.
-* **Retention:** by default **nothing is deleted**. Set `retention_days` in `[storage]` to purge automatically (checked hourly; each purge is recorded as an event), or run `purge --days N` manually.
-* **Upgrades:** the database schema is migrated automatically with Alembic at startup. A database created by a *newer* version is refused with a clear message. Back up before upgrading.
-* **Logs:** `logs\textile_automation.log` (rotating, 1 MB x 5, secrets redacted, repeated messages rate-limited).
-* More in [docs/OPERATIONS.md](docs/OPERATIONS.md).
+Optional environment variables:
 
-## Developing and testing
-
-```bat
-scripts\test.bat                      & rem all tests
-scripts\test.bat tests\unit -q        & rem a subset
-scripts\quality.bat                   & rem ruff format+check, mypy, static_check.py
-```
-
-Architecture, extension points and the requirement-to-test map are in `docs\`:
-[ARCHITECTURE](docs/ARCHITECTURE.md) · [HARDWARE_INTEGRATION](docs/HARDWARE_INTEGRATION.md) ·
-[SECURITY](docs/SECURITY.md) · [OPERATIONS](docs/OPERATIONS.md) · [VERIFICATION](docs/VERIFICATION.md) ·
-[TRACEABILITY](docs/TRACEABILITY.md) · [PUBLISHING](docs/PUBLISHING.md).
-
-## Troubleshooting
-
-| Symptom | Likely cause and fix |
+| Variable | Meaning |
 |---|---|
-| `setup.bat`: "py was not found" | Install Python 3.12+ from python.org with the *py launcher* option, open a **new** Command Prompt. |
-| "This project needs Python 3.12 or newer" | Install 3.12+, delete the `.venv` folder, run `setup.bat` again. |
-| `pip install` fails / times out | Check internet/proxy; retry. Corporate networks may need `pip config set global.proxy ...`. |
-| Browser shows "Monitoring could not start" | Open **Configuration**: it lists the exact configuration or database problem. Fix it and restart. |
-| "Database is not usable" / "Cannot open or initialise the database" | Folder not writable or file locked/corrupt. Set `TEXTILE_AUTOMATION_DATA_DIR` to a writable folder, or restore a backup. |
-| "created by a newer or different version" | Use a matching version or point to a different database file. |
-| Banner "RESTRICTED MODE" | Storage writes are failing (disk full, locked, permissions). Live values continue; history is **not** being saved. Fix the cause; it recovers automatically. |
-| Port 8501 in use | `python -m streamlit run app.py --server.port 8502` |
-| Everything shows STALE after restart | Expected: previous-session values are always STALE until re-acquired. |
-| Windows Firewall prompt | The app binds to `127.0.0.1` only; you can decline network access. |
+| `TEXTILE_AUTOMATION_CONFIG` | Path of the configuration file |
+| `TEXTILE_AUTOMATION_DATA_DIR` | Folder for the database and logs |
+| `TEXTILE_AUTOMATION_LOG_LEVEL` | `DEBUG`, `INFO`, `WARNING`, or `ERROR` |
 
-## Licence
+### Data location, backup, and retention
 
-MIT - see [LICENSE](LICENSE). Not certified for safety-related use.
+By default, data is stored in `%LOCALAPPDATA%\TextileIndustrialAutomation\`. The database is `textile_automation.db`. Logs are in the `logs` folder.
+
+```bat
+.venv\Scripts\python.exe -m textile_automation backup D:\Backups\
+.venv\Scripts\python.exe -m textile_automation purge --days 90
+```
+
+By default, nothing is deleted. To delete old history automatically, set `retention_days` in the `[storage]` section of the configuration file. More in [docs/OPERATIONS.md](docs/OPERATIONS.md).
+
+### Other commands
+
+```bat
+.venv\Scripts\python.exe -m textile_automation init-db
+.venv\Scripts\python.exe -m textile_automation run-simulator --seconds 30
+```
+
+## Project Structure
+
+```text
+app.py                  Dashboard entry point (Streamlit)
+config/                 Example configuration (devices.example.toml)
+examples/               Minimal configuration example
+docs/                   Architecture, security, operations, verification notes
+scripts/                Windows scripts: setup, run, test, simulate, quality, freeze
+src/textile_automation/
+  domain/               Core types: states, data quality, errors, models
+  adapters/             Adapter contract, registry, simulator
+  services/             Checks, state tracking, retries, events, acquisition
+  storage/              SQLite models, migrations, repository, backup
+  config/               Configuration loading and validation
+  ui/                   Dashboard pages, theme, display helpers
+  runtime.py            Starts and stops the whole application
+  cli.py                Command-line tools
+tests/
+  unit/                 Fast tests of single parts
+  integration/          Tests of connected parts, database, and dashboard load
+  simulation/           Scenario tests using the sample configuration
+```
+
+## Current Status
+
+This is an early release. It is a working, tested foundation, not a finished product.
+
+| Area | State |
+|---|---|
+| Simulator, reading checks, connection states, data quality | Implemented |
+| Database storage, events, retention, backup | Implemented |
+| Dashboard with five pages | Implemented |
+| Automated tests | 234 tests. All passed in the last full run on Windows. |
+| Connection to real machines or sensors | Not implemented |
+| Modbus TCP adapter | Not implemented. Deliberately deferred. See [docs/HARDWARE_INTEGRATION.md](docs/HARDWARE_INTEGRATION.md). |
+| Sign-in, user accounts, remote access, alerts, machine control | Not implemented and not part of this release |
+
+Not yet recorded in [docs/VERIFICATION.md](docs/VERIFICATION.md): a full manual check of every page in a browser, keyboard and screen-reader checks, and multi-day runs.
+
+All behaviour so far is simulated. No claim is made about any real machine, protocol, or timing.
+
+## Roadmap
+
+These are intentions, not commitments.
+
+- A read-only Modbus TCP adapter. It needs a documented register map for a real device and a test server, so we can prove it never sends a write command.
+- Testing with real equipment, using the checklist in [docs/HARDWARE_INTEGRATION.md](docs/HARDWARE_INTEGRATION.md).
+- Further protocols, such as OPC UA or MQTT, once a real use case exists.
+- Access control, only if the dashboard is ever shared over a network. Today it listens on the local computer only.
+
+## Contributing
+
+1. Fork the repository and create a branch.
+2. Run `scripts\setup.bat`.
+3. Make your change and add or update tests.
+4. Run `scripts\test.bat` and `scripts\quality.bat`.
+5. Open a pull request and describe what changed and why.
+
+Please follow these rules:
+
+- Keep the tool read-only. A test scans the source for write and control operations and fails if it finds one.
+- Label simulated data as simulated.
+- Never commit passwords, tokens, or real factory network addresses.
+- Do not present untested hardware behaviour as fact.
+
+To add an adapter, read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/HARDWARE_INTEGRATION.md](docs/HARDWARE_INTEGRATION.md) first. Security notes are in [docs/SECURITY.md](docs/SECURITY.md).
+
+## License
+
+MIT. See [LICENSE](LICENSE). The software is not certified for safety-related use and must not be used to control or protect machinery.
